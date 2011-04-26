@@ -1,0 +1,56 @@
+; i'm a comment :)
+
+var $int = 16
+var $float = 32.8
+var $string = 'this is a string!'
+var $array = [8, 16.4, ['64', "this is also a string!"]]
+const $constant = 128
+global $global = 256
+
+import 'external.hds'
+
+var $equation = (5/2)^2*({math:round $array.1, 2}*2)
+
+var $mergearray = [1,2,3] + [4, 5, 6, [7, 8, 9]]
+
+namespace 'foo'
+
+function bar $x, $y = 2
+    var $result = (20+$x)*$y
+    return '(20+' + $x + ')*' + $y + ' = ' + $result + "\n"
+done
+; note the 'done'!
+
+echo {foo:bar "10"}
+
+var $condition = $int <= 30 | $float < 30
+
+if $condition
+   if $constant === '128'
+       ; condition is not true :)
+   elseif true
+       var $name = "condition"
+       echo "Hello, this is a " + $name + "!\n"
+   end
+else
+    echo "else block!\n"
+end
+
+var $k = 0
+while $k <= 5
+    echo $k
+    set $k + 1
+end
+
+echo "\n"
+
+for $i = 2 to 6 step 2
+    echo $i
+end
+
+echo "\n"
+
+foreach $item in $array
+    echo $item.value
+    echo "\n"
+end

@@ -1,0 +1,5 @@
+HadesScript 0.4
+===============
+
+HadesScript is a simple scripting language inspired by BASIC and Lua. The package contains a parser written
+in PHP 5 that is powered by a tokenizer.

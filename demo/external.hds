@@ -1,0 +1,5 @@
+if $int == 16
+    var $codeBegin = 'echo "1st eval line\n"'
+end
+
+eval $codeBegin + "\n" + 'echo "2nd eval line\n"'
