@@ -7,7 +7,8 @@ include('../scriptparser.class.php');
 try {
     $parser = new scriptparser;
     $parser->executeFile('foobar.hds');
-} catch (scriptparser_error $error) {
+    print_r($parser->messages);
+} catch (Exception $error) {
     echo $error->getMessage();
 }
 ?>

@@ -132,7 +132,7 @@ class scriptparser {
                             return $this->_triggerMessage('Invalid syntax', 2);
                         $varName = $matches[1]; $varValue = $matches[2];
                         // make sure that it is not declared yet
-                        if (isset($this->variables[$varName])) {
+                        if (isSet($this->variables[$varName])) {
                             $this->_triggerMessage("Cannot redeclare variable \${$varName}");
                             continue;
                         }
@@ -155,14 +155,9 @@ class scriptparser {
                             return $this->_triggerMessage('Invalid syntax', 2);
                         $varPath = $matches[1]; $varOperation = $matches[2]; $varValue = $matches[3];
                         list($varName) = explode('.', $varPath);
-                        // make sure that it is already declared
-                        if (!isset($this->variables[$varName])) {
-                            $this->_triggerMessage("Cannot set undeclared variable \${$varName}");
-                            continue;
-                        }
                         // make sure we're not re-assigning a constant
                         if ($this->variables[$varName]->scope == 2) {
-                            $this->_triggerMessage("Cannot set constant \${$varName}");
+                            $this->_triggerMessage('Cannot set constant $'.$varName);
                             continue;
                         }
                         // operation type?
@@ -171,7 +166,6 @@ class scriptparser {
                                 $varValueResult = $varValue;
                                 break;
                             case '+':
-
                                 $variable = $this->getVariable($varPath);
                                 if (is_array($variable)) {
                                     array_push($variable, $varValue);
@@ -299,7 +293,7 @@ class scriptparser {
                             return $this->_triggerMessage('Invalid syntax in function block', 2);
                         $funcName = $matches[1];
                         // make sure it isn't defined yet
-                        if (isset($this->functions[$funcName]))
+                        if (isSet($this->functions[$funcName]))
                             return $this->_triggerMessage("Cannot redefine function {{$funcName}}", 2);
                         // get the arguments
                         $funcArgs = array(); $funcArgDefaults = array();
@@ -355,14 +349,14 @@ class scriptparser {
                     case 'end':
                         $type = $block->get('type');
                         if ($type == 'if') {
-                            $block->reduce();
+                            $block->remove();
                             $this->_level--;
                         } elseif ($type == 'while' || $type == 'for' || $type == 'foreach') {
                             if ($block->get('active')) {
                                 $lineNumber = $block->get('loop')-1;
                                 $this->_level--;
                             } else {
-                                $block->reduce();
+                                $block->remove();
                                 $this->_level--;
                             }
                         }
@@ -371,7 +365,7 @@ class scriptparser {
                         if (!$block->get('active'))
                             continue;
                         // get function name and check if the function exists
-                        if (!isset($this->functions[$command]))
+                        if (!isSet($this->functions[$command]))
                             return $this->_triggerMessage("Call to undefined function {{$command}}", 2);
                         // build arguments array
                         $funcArgs = array();
@@ -429,29 +423,19 @@ class scriptparser {
             // restore all previously backed up variables to the variable registry
             $this->variables = array_merge($this->variables, $varsBackup);
         }
-        return (isset($return) ? $return : true);
+        return (isSet($return) ? $return : true);
     }
     
     public function executeFile($file) {
         if (($code = file_get_contents($file)) === false)
-            return trigger_error("could not open script file '{$file}'", E_USER_ERROR);
+            return trigger_error('scriptparser: Could not open script file \''.$file.'\'', E_USER_ERROR);
         return $this->execute($code, realpath($file));
     }
     
     public function evaluateFormula($formula) {
         if (($tokens = $this->_tokenizeFormula($formula)) === false)
-            return $this->_triggerMessage("Invalid formula");
+            return $this->_triggerMessage('Invalid formula');
         return $this->_computeFormula($tokens);
-
-    }
-    
-    public function declareVariable($name, $value, $scope = 0) {
-        if (strpos($name, '.') !== false) {
-            trigger_error('scriptparser: Declaring a variable\'s subvalue is illegal', E_USER_WARNING);
-            return false;
-        }
-        $this->variables[$name] = new scriptparser_variable($value, $scope);
-        return true;
     }
     
     public function getVariable($path) {
@@ -463,30 +447,35 @@ class scriptparser {
         if (!empty($key)) {
             foreach ($key as $keyPart) {
                 if (preg_match('/^\d+$/', $keyPart)) {
-                    $varSkeleton .= "[{$keyPart}]";
+                    $varSkeleton .= '['.$keyPart.']';
                 } elseif (preg_match('/^[a-zA-Z_]\w*$/', $keyPart)) {
-                    $varSkeleton .= "['{$keyPart}']";
+                    $varSkeleton .= '[\''.$keyPart.'\']';
                 } else {
-                    trigger_error("scriptparser: Invalid key name", E_USER_WARNING);
+                    trigger_error('scriptparser: Invalid key name for variable', E_USER_WARNING);
                     return null;
                 }
-
-
             }
         }
         // get the variable
-        return eval("return (isset(\$this->variables['{$name}']) ? {$varSkeleton} : false);");
+        return eval("return (isSet(\$this->variables['{$name}']) ? {$varSkeleton} : false);");
+    }
+    
+    public function declareVariable($name, $value, $scope = 0) {
+        if (strpos($name, '.') !== false) {
+            trigger_error('scriptparser: Declaring a variable\'s subvalue is illegal', E_USER_WARNING);
+            return false;
+        }
+        $this->variables[$name] = new scriptparser_variable($value, $scope);
+        return true;
     }
     
     public function setVariable($path, $value) {
         $pathParts = explode('.', $path);
         $name = $pathParts[0];
-        // check if declared
-        if (!isset($this->variables[$name])) {
-            trigger_error("scriptparser: Cannot set undeclared variable \${$name}", E_USER_WARNING);
-            return false;
-        }
-        // everything is okay
+        // is it not yet declared? then declare it as local variable
+        if (!isSet($this->variables[$name]))
+            $this->declareVariable($name, $value, 0);
+        // get the key
         $key = array_slice($pathParts, 1);
         // generate skeleton
         $varSkeleton = "\$this->variables['{$name}']->value";
@@ -497,7 +486,7 @@ class scriptparser {
                 } elseif (preg_match('/^[a-zA-Z_]\w*$/', $keyPart)) {
                     $varSkeleton .= "['{$keyPart}']";
                 } else {
-                    trigger_error("scriptparser: Invalid key name", E_USER_WARNING);
+                    trigger_error('scriptparser: Invalid key name for variable', E_USER_WARNING);
                     return null;
                 }
             }
@@ -506,6 +495,38 @@ class scriptparser {
         eval("\$varRef =& {$varSkeleton};");
         $varRef = $value;
         return true;
+    }
+    
+    public function castFunction($name, array $arguments) {
+        // is function defined?
+        if (isSet($this->functions[$name])) {
+            $func = $this->functions[$name];
+        } else {
+            trigger_error('scriptparser: Call to undefined function {'.$name.'}', E_USER_WARNING);
+            return false;
+        }
+        // make a list of predefined variables (arguments)
+        $predefinedVars = array();
+        foreach ($func->arguments as $argIndex => $argName) {
+            if (isSet($arguments[$argIndex])) {
+                $predefinedVars[$argName] = $arguments[$argIndex];
+            } elseif (isSet($func->argDefaults[$argName])) {
+                $predefinedVars[$argName] = $func->argDefaults[$argName];
+            } else {
+                $predefinedVars[$argName] = $this->_triggerMessage('No default value for argument $'.$argName.' of {'.$name.'}', 2);
+            }
+        }
+        // what type?
+        if ($func->type == 'callback') {
+            // is it a PHP callback...
+            return call_user_func_array($func->sequence, $predefinedVars);
+        } elseif ($func->type = 'code') {
+            // ... or some HadesScript code?
+            return $this->execute($func->sequence, '{'.$name.'}', true, $predefinedVars);
+        } else {
+            // something else
+            return false;
+        }
     }
     
     public function createFunction($namespace = null, $name, $sequence, array $arguments, array $argDefaults = array()) {
@@ -536,38 +557,6 @@ class scriptparser {
             $this->createFunction($namespace, $funcName, array($class, $funcName), $funcArgs, $funcArgDefaults);
         }
         return true;
-    }
-    
-    public function castFunction($name, array $arguments) {
-        // is function defined?
-        if (isset($this->functions[$name])) {
-            $func = $this->functions[$name];
-        } else {
-            trigger_error('scriptparser: Call to undefined function {'.$name.'}', E_USER_WARNING);
-            return false;
-        }
-        // make a list of predefined variables (arguments)
-        $predefinedVars = array();
-        foreach ($func->arguments as $argIndex => $argName) {
-            if (isset($arguments[$argIndex])) {
-                $predefinedVars[$argName] = $arguments[$argIndex];
-            } elseif (isset($func->argDefaults[$argName])) {
-                $predefinedVars[$argName] = $func->argDefaults[$argName];
-            } else {
-                $predefinedVars[$argName] = $this->_triggerMessage("No default value for argument \${$argName} of {{$name}}", 2);
-            }
-        }
-        // what type?
-        if ($func->type == 'callback') {
-            // is it a PHP callback...
-            return call_user_func_array($func->sequence, $predefinedVars);
-        } elseif ($func->type = 'code') {
-            // ... or some HadesScript code?
-            return $this->execute($func->sequence, "{{$name}}", true, $predefinedVars);
-        } else {
-            // something else
-            return false;
-        }
     }
     
     private function _tokenizeFormula($expression) {
@@ -630,7 +619,7 @@ class scriptparser {
                         $expectingOperator = true;
                     }
                 } else {
-                    return $this->_triggerMessage("Unexpected '{$char}'", 2);
+                    return $this->_triggerMessage('Unexpected closing array delimiter', 2);
                 }
             } elseif ($char == '{' && $depth['arr'] == 0 && $depth['sts'] == 0 && $depth['std'] == 0) {
                 $buffer .= $char;
@@ -648,7 +637,7 @@ class scriptparser {
                         $expectingOperator = true;
                     }
                 } else {
-                    return $this->_triggerMessage("Unexpected '{$char}'", 2);
+                    return $this->_triggerMessage('Unexpected closing function call delimiter', 2);
                 }
             } elseif (!$escape && $char == '\\' && ($depth['sts'] == 1 || $depth['std'] == 1)) {
                 $buffer .= '\\';
@@ -713,7 +702,7 @@ class scriptparser {
                 while (($operator2 = $stack->pop()) != '(') {
                     // pop off the stack back to the last (
                     if (is_null($operator2))
-                        return $this->_triggerMessage("Unexpected closing parenthesis", 2);
+                        return $this->_triggerMessage('Unexpected closing parenthesis', 2);
                     else
                         $output[] = $operator2;
                 }
@@ -737,19 +726,20 @@ class scriptparser {
                 $index += strlen($val);
             } elseif ($char == ')') {
                 // miscellaneous error checking
-                return $this->_triggerMessage("Unexpected closing parenthesis", 2);
+                return $this->_triggerMessage('Unexpected closing parenthesis', 2);
             } elseif (in_array($char, $operators) and !$expectingOperator) {
                 // unexpected operator
-                return $this->_triggerMessage("Unexpected operator '{$char}'", 2);
+                return $this->_triggerMessage('Unexpected operator \''.$char.'\'', 2);
             } else {
                 // unknown character
-                return $this->_triggerMessage("Illegal character '{$char}'", 2);
+                return $this->_triggerMessage('Illegal character \''.$char.'\'', 2);
             }
             if ($index == strlen($expression)) {
-                if (in_array($char, $operators))
-                    return $this->_triggerMessage("Missing operand for operator '{$char}'", 2);
-                else
+                if (in_array($char, $operators)) {
+                    return $this->_triggerMessage('Missing operand for operator \''.$char.'\'', 2);
+                } else {
                     break;
+                }
             }
             while ($depth['sts'] == 0 && $depth['std'] == 0 && $depth['arr'] == 0 && $depth['fnc'] == 0 && substr($expression, $index, 1) == ' ') {
                 // step the index past whitespace (pretty much turns whitespace into implicit multiplication
@@ -925,7 +915,7 @@ class scriptparser {
                     return $this->_triggerMessage('Invalid syntax in fuction call', 2);
                 // get function name and check if the function exists
                 $funcName = $matches[1];
-                if (!isset($this->functions[$funcName]))
+                if (!isSet($this->functions[$funcName]))
                     return $this->_triggerMessage("Call to undefined function {{$funcName}}", 2);
                 // build arguments array
                 $funcArgs = array();
@@ -1104,7 +1094,18 @@ class scriptparser_blockStack {
     }
     
     public function isRegistered() {
-        return isset($this->_stack[$this->_currentLevel]);
+        return isSet($this->_stack[$this->_currentLevel]);
+    }
+    
+    public function get($property, $n = 0) {
+        $level = $this->_currentLevel - $n;
+        if ($property == 'iteration') {
+            if ($this->_stack[$level]['loop'])
+                return $this->_stack[$level]['iteration'];
+            return false;
+        } else {
+            return $this->_stack[$level][$property];
+        }
     }
     
     public function update($type, $active = true, $loop = false, $iterate = 1) {
@@ -1118,23 +1119,12 @@ class scriptparser_blockStack {
         }
     }
     
-    public function reduce() {
+    public function remove() {
         if ($this->_stackLevel > 0) {
             array_pop($this->_stack);
             $this->_stackLevel--;
         }
         return false;
-    }
-    
-    public function get($property, $n = 0) {
-        $level = $this->_currentLevel - $n;
-        if ($property == 'iteration') {
-            if ($this->_stack[$level]['loop'])
-                return $this->_stack[$level]['iteration'];
-            return false;
-        } else {
-            return $this->_stack[$level][$property];
-        }
     }
     
 }
