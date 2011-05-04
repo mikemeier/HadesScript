@@ -28,7 +28,7 @@ class scriptparser {
     
     private $_level = 0;
     
-    private $_recordFunction = false;
+    private $_capture = false;
     
     private $_cache = array();
     
@@ -75,12 +75,12 @@ class scriptparser {
             $line = trim($lines[$lineNumber-1]);
             if ($line != '' && substr($line, 0, 1) != ';') {
                 preg_match('/^([a-zA-Z_][\w:]*)(?:\s+(.+))*$/', $line, $matches);
-                $command = $matches[1]; $parameters = $matches[2];
-                if ($func = $this->_recordFunction) {
+                $command = $matches[1]; $parameters = (isSet($matches[2]) ? $matches[2] : false);
+                if ($func = $this->_capture) {
                     if ($command == 'done') {
                         $sequence = implode("\n", $this->_cache); $this->_cache = array();
                         $this->createFunction($this->namespace, $func['name'], $sequence, $func['args'], $func['argDefaults']);
-                        $this->_recordFunction = false;
+                        $this->_capture = false;
                     } else {
                         $this->_cache[] = $line;
                     }
@@ -289,58 +289,29 @@ class scriptparser {
                         $block->update('foreach', $active, $loop);
                         break;
                     case 'function':
-                        if (!preg_match('/^([a-zA-Z_]\w*)\s+(.+)$/', $parameters, $matches))
-                            return $this->_triggerMessage('Invalid syntax in function block', 2);
-                        $funcName = $matches[1];
+                        if (preg_match('/^([a-zA-Z_]\w*)\s+(.+)$/', $parameters, $matches)) {
+                            $funcName = $matches[1];
+                            $funcArgsList = $matches[2];
+                        } elseif (preg_match('/^[a-zA-Z_]\w*$/', $parameters)) {
+                            $funcName = $parameters;
+                            $funcArgsList = false;
+                        } else {
+                            return $this->_triggerMessage('Invalid syntax in function definition', 2);
+                        }
                         // make sure it isn't defined yet
                         if (isSet($this->functions[$funcName]))
-                            return $this->_triggerMessage("Cannot redefine function {{$funcName}}", 2);
+                            return $this->_triggerMessage('Cannot redefine function {'.$funcName.'}', 2);
                         // get the arguments
                         $funcArgs = array(); $funcArgDefaults = array();
-                        $buffer = ''; $end = strlen($matches[2]); $chars = str_split($matches[2]);
-                        $depth = array('std' => 0, 'sts' => 0, 'arr' => 0, 'fnc' => 0);
-                        for ($pos = 0; $pos <= $end; $pos++) {
-                            $char = $chars[$pos];
-                            if ($char == "'" && $depth['arr'] == 0 && $depth['fnc'] == 0 && $depth['std'] == 0) {
-                                if ($depth['sts'] == 0) {
-                                    $depth['sts']++;
-                                } else {
-                                    $depth['sts']--;
-                                }
-                            } elseif ($char == '"' && $depth['arr'] == 0 && $depth['fnc'] == 0 && $depth['sts'] == 0) {
-                                if ($depth['std'] == 0) {
-                                    $depth['std']++;
-                                } else {
-                                    $depth['std']--;
-                                }
-                            } elseif ($char == '[' && $depth['fnc'] == 0 && $depth['sts'] == 0 && $depth['std'] == 0) {
-                                $depth['arr']++;
-                            } elseif ($char == ']' && $depth['fnc'] == 0 && $depth['sts'] == 0 && $depth['std'] == 0) {
-                                $depth['arr']--;
-                            } elseif ($char == '{' && $depth['arr'] == 0 && $depth['sts'] == 0 && $depth['std'] == 0) {
-                                $depth['fnc']++;
-                            } elseif ($char == '}' && $depth['arr'] == 0 && $depth['sts'] == 0 && $depth['std'] == 0) {
-                                $depth['fnc']--;
-                            }
-                            $onTop = $depth['sts'] == 0 && $depth['std'] == 0 && $depth['arr'] == 0 && $depth['fnc'] == 0;
-                            if (($char == ',' && $onTop) || $pos == $end) {
-                                if (preg_match('/^\$([a-zA-Z_]\w*)=(.+)$/', $buffer, $matches)) {
-                                    $funcArgs[] = $matches[1];
-                                    $funcArgDefaults[$matches[1]] = $this->evaluateFormula($matches[2]);
-                                } elseif (preg_match('/^\$([a-zA-Z_]\w*)$/', $buffer, $matches)) {
-                                    $funcArgs[] = $matches[1];
-                                } else {
-                                    return $this->_triggerMessage('Invalid syntax in function block', 2);
-                                }
-                                $buffer = '';
-                            } elseif ($char == ' ' && $onTop) {
-                                continue;
-                            } else {
-                                $buffer .= $char;
+                        if ($funcArgsList) {
+                            foreach ($this->_walkAssignList($funcArgsList) as $key => $value) {
+                                $funcArgs[] = $key;
+                                if (!is_null($value))
+                                    $funcArgDefaults[$key] = $value;
                             }
                         }
                         // register block
-                        $this->_recordFunction = array(
+                        $this->_capture = array(
                             'name' => $funcName,
                             'args' => $funcArgs,
                             'argDefaults' => $funcArgDefaults
@@ -354,11 +325,10 @@ class scriptparser {
                         } elseif ($type == 'while' || $type == 'for' || $type == 'foreach') {
                             if ($block->get('active')) {
                                 $lineNumber = $block->get('loop')-1;
-                                $this->_level--;
                             } else {
                                 $block->remove();
-                                $this->_level--;
                             }
+                            $this->_level--;
                         }
                         break;
                     default:
@@ -366,47 +336,14 @@ class scriptparser {
                             continue;
                         // get function name and check if the function exists
                         if (!isSet($this->functions[$command]))
-                            return $this->_triggerMessage("Call to undefined function {{$command}}", 2);
+                            return $this->_triggerMessage('Call to undefined function {'.$command.'}', 2);
                         // build arguments array
-                        $funcArgs = array();
-                        $end = strlen($parameters); $chars = str_split($parameters);
-                        for ($pos = 0; $pos <= $end; $pos++) {
-                            $char = $chars[$pos];
-                            if ($char == "'" && $depth['arr'] == 0 && $depth['fnc'] == 0 && $depth['std'] == 0) {
-                                if ($depth['sts'] == 0) {
-                                    $depth['sts']++;
-                                } elseif (!$escape) {
-                                    $depth['sts']--;
-                                }
-                            } elseif ($char == '"' && $depth['arr'] == 0 && $depth['fnc'] == 0 && $depth['sts'] == 0) {
-                                if ($depth['std'] == 0) {
-                                    $depth['std']++;
-                                } elseif (!$escape) {
-                                    $depth['std']--;
-                                }
-                            } elseif ($char == '[' && $depth['fnc'] == 0 && $depth['sts'] == 0 && $depth['std'] == 0) {
-                                $depth['arr']++;
-                            } elseif ($char == ']' && $depth['fnc'] == 0 && $depth['sts'] == 0 && $depth['std'] == 0) {
-                                $depth['arr']--;
-                            } elseif ($char == '{' && $depth['arr'] == 0 && $depth['sts'] == 0 && $depth['std'] == 0) {
-                                $depth['fnc']++;
-                            } elseif ($char == '}' && $depth['arr'] == 0 && $depth['sts'] == 0 && $depth['std'] == 0) {
-                                $depth['fnc']--;
-                            } elseif (!$escape && $char == '\\' && ($depth['sts'] == 1 || $depth['std'] == 1)) {
-                                $escape = true;
-                            } else {
-                                $escape = false;
-                            }
-                            $onTop = $depth['sts'] == 0 && $depth['std'] == 0 && $depth['arr'] == 0 && $depth['fnc'] == 0;
-                            if (($char == ',' && $onTop) || $pos == $end) {
-                                $funcArgs[] = $this->evaluateFormula($buffer);
-                                $buffer = '';
-                            } elseif ($char == ' ' && $onTop) {
-                                continue;
-                            } else {
-                                $buffer .= $char;
-                            }
+                        if ($parameters) {
+                            $funcArgs = $this->_walkValueList($parameters);
+                        } else {
+                            $funcArgs = array();
                         }
+                        // cast the function
                         $this->castFunction($command, $funcArgs);
                         break;
                 }
@@ -563,17 +500,17 @@ class scriptparser {
         $index = 0;
         $stack = new scriptparser_mathStack;
         $output = array();
-        $expression = trim($expression);
+        $depth = array('std' => 0, 'sts' => 0, 'arr' => 0, 'fnc' => 0);
+        $escape = false;
+        $buffer = '';
+        $expectingOperator = false; // we use this for syntax-checking and determining if a '-' is a negation
+        
         // all allowed operators
         $operators = array('+', '-', '*', '/', '%', '^', '_');
         $operatorsRightAssoc = array('+' => 0, '-' => 0, '*' => 0, '/' => 0, '%' => 0, '_' => 0, '^' => 1);
         $operatorsPrecedence = array('+' => 0, '-' => 0, '*' => 1, '/' => 1, '%' => 1, '_' => 1, '^' => 2);
-        // depth and buffer, used for parsing enclosures like arrays or function calls
-        $depth = array('std' => 0, 'sts' => 0, 'arr' => 0, 'fnc' => 0);
-        $escape = false;
-        $buffer = '';
-        // we use this in syntax-checking the expression and determining when a - is a negation
-        $expectingOperator = false;
+        
+        $expression = trim($expression);
         while (true) {
             // get the first character at the current index
             $char = $expression[$index];
@@ -652,8 +589,9 @@ class scriptparser {
                 $stack->push('_');
                 $index++;
             } elseif ($char == '_') {
-                // we have to explicitly deny this, because it's legal on the stack and therefore not in the input expression
-                return $this->_triggerMessage("Illegal character '_'");
+                // we have to explicitly deny this, because it's legal on the stack and therefore not in the
+                // input expression
+                return $this->_triggerMessage('Illegal character \'_\'');
             } elseif ((in_array($char, $operators) || in_array($char, array('&', '|', '~', '=', '!', '<', '>')) || $atBeginning) && $expectingOperator) {
                 // are we putting an operator on the stack?
                 if ($atBeginning) {
@@ -681,7 +619,7 @@ class scriptparser {
                         $stack->push($char . '=');
                         $index += 2;
                     } else {
-                        return $this->_triggerMessage("Illegal character '{$char}'", 2);
+                        return $this->_triggerMessage('Illegal character \''.$char.'\'', 2);
                     }
                 } elseif ($char == '<' || $char == '>') {
                     if ($expression[$index + 1] == '=') {
@@ -695,16 +633,17 @@ class scriptparser {
                     $stack->push($char);
                     $index++;
                 }
-                // finally put OUR operator onto the stack
+                // finally put our operator onto the stack
                 $expectingOperator = false;
             } elseif ($char == ')' && $expectingOperator) {
                 // ready to close a parenthesis?
                 while (($operator2 = $stack->pop()) != '(') {
                     // pop off the stack back to the last (
-                    if (is_null($operator2))
+                    if (is_null($operator2)) {
                         return $this->_triggerMessage('Unexpected closing parenthesis', 2);
-                    else
+                    } else {
                         $output[] = $operator2;
+                    }
                 }
                 $index++;
             } elseif ($char == '(' && !$expectingOperator) {
@@ -716,18 +655,12 @@ class scriptparser {
                 // do we now have a variable/value?
                 $expectingOperator = true;
                 $val = $match[1];
-                if (preg_match('/^(\$[a-zA-Z_][\w\.]*)$/', $val, $matches)) {
-                    // it's a var with implicit multiplication
-                    $val = $matches[1];
-                    $output[] = $val;
-                } else {
-                    $output[] = $val;
-                }
+                $output[] = $val;
                 $index += strlen($val);
             } elseif ($char == ')') {
                 // miscellaneous error checking
                 return $this->_triggerMessage('Unexpected closing parenthesis', 2);
-            } elseif (in_array($char, $operators) and !$expectingOperator) {
+            } elseif (in_array($char, $operators) && !$expectingOperator) {
                 // unexpected operator
                 return $this->_triggerMessage('Unexpected operator \''.$char.'\'', 2);
             } else {
@@ -747,18 +680,22 @@ class scriptparser {
                 $index++;
             }
         }
+        
+        // is everything okay?
         if ($depth['sts'] >= 1 || $depth['std'] >= 1)
-            return $this->_triggerMessage("Missing closing string delimiter", 2);
+            return $this->_triggerMessage('Missing closing string delimiter', 2);
         if ($depth['arr'] >= 1)
-            return $this->_triggerMessage("Missing closing array delimiter", 2);
+            return $this->_triggerMessage('Missing closing array delimiter', 2);
         if ($depth['fnc'] >= 1)
-            return $this->_triggerMessage("Missing closing function call delimiter", 2);
+            return $this->_triggerMessage('Missing closing function call delimiter', 2);
+            
+        // pop everything off the stack and push onto output if there are (s on the stack, ()s were unbalanced
         while (!is_null($char = $stack->pop())) {
-            // pop everything off the stack and push onto output if there are (s on the stack, ()s were unbalanced
             if ($char == '(')
-                return $this->_triggerMessage("Missing closing parenthesis", 2);
+                return $this->_triggerMessage('Missing closing parenthesis', 2);
             $output[] = $char;
         }
+        
         return $output;
     }
     
@@ -768,9 +705,6 @@ class scriptparser {
         $operators = array('+', '-', '*', '/', '%', '^', '&', '|', '~', '==', '===', '!=', '!==', '<', '<=', '>', '>=');
         $stack = new scriptparser_mathStack;
         foreach ($tokens as $token) {
-            $depth = array('std' => 0, 'sts' => 0, 'arr' => 0, 'fnc' => 0);
-            $escape = false;
-            $buffer = '';
             if (in_array($token, $operators)) {
                 // if the token is a binary operator, pop two values off the stack, do the operation, and push
                 // the result back on
@@ -780,19 +714,19 @@ class scriptparser {
                     return $this->_triggerMessage('Invalid or missing first operand');
                 switch ($token) {
                     case '+':
-                        if (is_numeric($operand1) && is_numeric($operand2)) {
-                            $stack->push($operand1 + $operand2);
-                        } elseif (is_array($operand1) && is_array($operand2)) {
+                        if (is_array($operand1) && is_array($operand2)) {
                             $stack->push(array_merge($operand1, $operand2));
-                        } elseif (is_string($operand1) || is_string($operand2)) {
+                        } elseif (is_string($operand1)) {
                             $stack->push($operand1 . $operand2);
+                        } else {
+                            $stack->push($operand1 + $operand2);
                         }
                         break;
                     case '-':
-                        if (is_numeric($operand1) && is_numeric($operand2)) {
-                            $stack->push($operand1 - $operand2);
-                        } elseif (is_array($operand1) && is_array($operand2)) {
+                        if (is_array($operand1) && is_array($operand2)) {
                             $stack->push(array_diff($operand1, $operand2));
+                        } else {
+                            $stack->push($operand1 - $operand2);
                         }
                         break;
                     case '*':
@@ -843,122 +777,53 @@ class scriptparser {
                         $stack->push($operand1 >= $operand2);
                         break;
                 }
-            } elseif ($token == "_") {
+            } elseif ($token == '_') {
                 // if the token is a unary operator, pop one value off the stack, do the operation, and push
                 // it back on
                 $stack->push(-1 * $stack->pop());
             } elseif (preg_match('/^(true|false)$/i', $token) || is_numeric($token)) {
                 // it's a boolean value or a numeric value
-                eval("\$stack->push({$token});");
+                eval('$stack->push('.$token.');');
             } elseif ($this->_isEnclosure("'", $token, $result)) {
                 // it's a simple string
-                eval("\$stack->push('{$result}');");
+                eval('$stack->push(\''.$result.'\');');
             } elseif ($this->_isEnclosure('"', $token, $result)) {
                 // it's a double-quoted string
                 $string = str_replace('$', '\$', $result);
-                eval("\$stack->push(\"{$string}\");");
+                eval('$stack->push("'.$string.'");');
             } elseif ($this->_isEnclosure(array('[', ']'), $token, $result)) {
-                // it's an array, check if it is emty
+                // it's an array
                 if ($result == '') {
-                    // yes, it's empty
+                    // the array is empty
                     $stack->push(array());
                     continue;
                 }
-                // no, there is at least one value
-                $output = array();
-                $end = strlen($result); $chars = str_split($result);
-                for ($pos = 0; $pos <= $end; $pos++) {
-                    $char = $chars[$pos];
-                    if ($char == "'" && $depth['arr'] == 0 && $depth['fnc'] == 0 && $depth['std'] == 0) {
-                        if ($depth['sts'] == 0) {
-                            $depth['sts']++;
-                        } elseif (!$escape) {
-                            $depth['sts']--;
-                        }
-                    } elseif ($char == '"' && $depth['arr'] == 0 && $depth['fnc'] == 0 && $depth['sts'] == 0) {
-                        if ($depth['std'] == 0) {
-                            $depth['std']++;
-                        } elseif (!$escape) {
-                            $depth['std']--;
-                        }
-                    } elseif ($char == '[' && $depth['fnc'] == 0 && $depth['sts'] == 0 && $depth['std'] == 0) {
-                        $depth['arr']++;
-                    } elseif ($char == ']' && $depth['fnc'] == 0 && $depth['sts'] == 0 && $depth['std'] == 0) {
-                        $depth['arr']--;
-                    } elseif ($char == '{' && $depth['arr'] == 0 && $depth['sts'] == 0 && $depth['std'] == 0) {
-                        $depth['fnc']++;
-                    } elseif ($char == '}' && $depth['arr'] == 0 && $depth['sts'] == 0 && $depth['std'] == 0) {
-                        $depth['fnc']--;
-                    } elseif (!$escape && $char == '\\' && ($depth['sts'] == 1 || $depth['std'] == 1)) {
-                        $escape = true;
-                    } else {
-                        $escape = false;
-                    }
-                    $onTop = $depth['sts'] == 0 && $depth['std'] == 0 && $depth['arr'] == 0 && $depth['fnc'] == 0;
-                    if (($char == ',' && $onTop) || $pos == $end) {
-                        if (preg_match('/^([a-zA-Z_]\w*)\s*:\s*(.+)$/', $buffer, $matches)) {
-                            $output[$matches[1]] = $this->evaluateFormula($matches[2]);
-                        } else {
-                            $output[] = $this->evaluateFormula($buffer);
-                        }
-                        $buffer = '';
-                    } elseif ($char == ' ' && $onTop) {
-                        continue;
-                    } else {
-                        $buffer .= $char;
-                    }
-                }
-                $stack->push($output);
+                // get the values and push the result onto the stack
+                $pushVal = $this->_walkValueList($result, true);
+                $stack->push($pushVal);
             } elseif ($this->_isEnclosure(array('{', '}'), $token, $result)) {
                 // it's a function call
-                if (!preg_match('/^([a-zA-Z_][\w:]*)\s+(.+)$/', $result, $matches))
-                    return $this->_triggerMessage('Invalid syntax in fuction call', 2);
-                // get function name and check if the function exists
-                $funcName = $matches[1];
-                if (!isSet($this->functions[$funcName]))
-                    return $this->_triggerMessage("Call to undefined function {{$funcName}}", 2);
-                // build arguments array
-                $funcArgs = array();
-                $end = strlen($matches[2]); $chars = str_split($matches[2]);
-                for ($pos = 0; $pos <= $end; $pos++) {
-                    $char = $chars[$pos];
-                    if ($char == "'" && $depth['arr'] == 0 && $depth['fnc'] == 0 && $depth['std'] == 0) {
-                        if ($depth['sts'] == 0) {
-                            $depth['sts']++;
-                        } elseif (!$escape) {
-                            $depth['sts']--;
-                        }
-                    } elseif ($char == '"' && $depth['arr'] == 0 && $depth['fnc'] == 0 && $depth['sts'] == 0) {
-                        if ($depth['std'] == 0) {
-                            $depth['std']++;
-                        } elseif (!$escape) {
-                            $depth['std']--;
-                        }
-                    } elseif ($char == '[' && $depth['fnc'] == 0 && $depth['sts'] == 0 && $depth['std'] == 0) {
-                        $depth['arr']++;
-                    } elseif ($char == ']' && $depth['fnc'] == 0 && $depth['sts'] == 0 && $depth['std'] == 0) {
-                        $depth['arr']--;
-                    } elseif ($char == '{' && $depth['arr'] == 0 && $depth['sts'] == 0 && $depth['std'] == 0) {
-                        $depth['fnc']++;
-                    } elseif ($char == '}' && $depth['arr'] == 0 && $depth['sts'] == 0 && $depth['std'] == 0) {
-                        $depth['fnc']--;
-                    } elseif (!$escape && $char == '\\' && ($depth['sts'] == 1 || $depth['std'] == 1)) {
-                        $escape = true;
-                    } else {
-                        $escape = false;
-                    }
-                    $onTop = $depth['sts'] == 0 && $depth['std'] == 0 && $depth['arr'] == 0 && $depth['fnc'] == 0;
-                    if (($char == ',' && $onTop) || $pos == $end) {
-                        $funcArgs[] = $this->evaluateFormula($buffer);
-                        $buffer = '';
-                    } elseif ($char == ' ' && $onTop) {
-                        continue;
-                    } else {
-                        $buffer .= $char;
-                    }
+                if (preg_match('/^([a-zA-Z_][\w:]*)\s+(.+)$/', $result, $matches)) {
+                    $funcName = $matches[1];
+                    $funcArgsList = $matches[2];
+                } elseif (preg_match('/^[a-zA-Z_][\w:]*$/', $result)) {
+                    $funcName = $result;
+                    $funcArgsList = false;
+                } else {
+                    return $this->_triggerMessage('Invalid syntax in function call', 2);
                 }
-                $result = $this->castFunction($funcName, $funcArgs);
-                $stack->push($result);
+                // check if the function already exists
+                if (!isSet($this->functions[$funcName]))
+                    return $this->_triggerMessage('Call to undefined function {'.$funcName.'}', 2);
+                // build arguments array
+                if ($funcArgsList) {
+                    $funcArgs = $this->_walkValueList($funcArgsList);
+                } else {
+                    $funcArgs = array();
+                }
+                // cast the function and push the result onto the stack
+                $pushVal = $this->castFunction($funcName, $funcArgs);
+                $stack->push($pushVal);
             } elseif (preg_match('/^\$([a-zA-Z_][\w\.]*)$/', $token, $matches)) {
                 // it's a value represented by a variable
                 $stack->push($this->getVariable($matches[1]));
@@ -992,6 +857,100 @@ class scriptparser {
         }
         $result = null;
         return false;
+    }
+    
+    private function _walkValueList($input, $keying = false) {
+        $return = array(); $buffer = '';
+        $depth = array('std' => 0, 'sts' => 0, 'arr' => 0, 'fnc' => 0); $escape = false;
+        $end = strlen($input); $chars = str_split($input);
+        for ($pos = 0; $pos <= $end; $pos++) {
+            $char = $chars[$pos];
+            if ($char == "'" && $depth['arr'] == 0 && $depth['fnc'] == 0 && $depth['std'] == 0) {
+                if ($depth['sts'] == 0) {
+                    $depth['sts']++;
+                } elseif (!$escape) {
+                    $depth['sts']--;
+                }
+            } elseif ($char == '"' && $depth['arr'] == 0 && $depth['fnc'] == 0 && $depth['sts'] == 0) {
+                if ($depth['std'] == 0) {
+                    $depth['std']++;
+                } elseif (!$escape) {
+                    $depth['std']--;
+                }
+            } elseif ($char == '[' && $depth['fnc'] == 0 && $depth['sts'] == 0 && $depth['std'] == 0) {
+                $depth['arr']++;
+            } elseif ($char == ']' && $depth['fnc'] == 0 && $depth['sts'] == 0 && $depth['std'] == 0) {
+                $depth['arr']--;
+            } elseif ($char == '{' && $depth['arr'] == 0 && $depth['sts'] == 0 && $depth['std'] == 0) {
+                $depth['fnc']++;
+            } elseif ($char == '}' && $depth['arr'] == 0 && $depth['sts'] == 0 && $depth['std'] == 0) {
+                $depth['fnc']--;
+            } elseif (!$escape && $char == '\\' && ($depth['sts'] == 1 || $depth['std'] == 1)) {
+                $escape = true;
+            } else {
+                $escape = false;
+            }
+            $onTop = $depth['sts'] == 0 && $depth['std'] == 0 && $depth['arr'] == 0 && $depth['fnc'] == 0;
+            if (($char == ',' && $onTop) || $pos == $end) {
+                if ($keying && preg_match('/^([a-zA-Z_]\w*)\s*:\s*(.+)$/', $buffer, $matches)) {
+                    $output[$matches[1]] = $this->evaluateFormula($matches[2]);
+                } else {
+                    $return[] = $this->evaluateFormula($buffer);
+                }
+                $buffer = '';
+            } elseif ($char == ' ' && $onTop) {
+                continue;
+            } else {
+                $buffer .= $char;
+            }
+        }
+        return $return;
+    }
+    
+    private function _walkAssignList($input) {
+        $return = array(); $buffer = '';
+        $depth = array('std' => 0, 'sts' => 0, 'arr' => 0, 'fnc' => 0); $escape = false;
+        $end = strlen($input); $chars = str_split($input);
+        for ($pos = 0; $pos <= $end; $pos++) {
+            $char = $chars[$pos];
+            if ($char == "'" && $depth['arr'] == 0 && $depth['fnc'] == 0 && $depth['std'] == 0) {
+                if ($depth['sts'] == 0) {
+                    $depth['sts']++;
+                } else {
+                    $depth['sts']--;
+                }
+            } elseif ($char == '"' && $depth['arr'] == 0 && $depth['fnc'] == 0 && $depth['sts'] == 0) {
+                if ($depth['std'] == 0) {
+                    $depth['std']++;
+                } else {
+                    $depth['std']--;
+                }
+            } elseif ($char == '[' && $depth['fnc'] == 0 && $depth['sts'] == 0 && $depth['std'] == 0) {
+                $depth['arr']++;
+            } elseif ($char == ']' && $depth['fnc'] == 0 && $depth['sts'] == 0 && $depth['std'] == 0) {
+                $depth['arr']--;
+            } elseif ($char == '{' && $depth['arr'] == 0 && $depth['sts'] == 0 && $depth['std'] == 0) {
+                $depth['fnc']++;
+            } elseif ($char == '}' && $depth['arr'] == 0 && $depth['sts'] == 0 && $depth['std'] == 0) {
+                $depth['fnc']--;
+            }
+            $onTop = $depth['sts'] == 0 && $depth['std'] == 0 && $depth['arr'] == 0 && $depth['fnc'] == 0;
+            if (($char == ',' && $onTop) || $pos == $end) {
+                if (preg_match('/^\$([a-zA-Z_]\w*)=(.+)$/', $buffer, $matches)) {
+                    $return[$matches[1]] = $this->evaluateFormula($matches[2]);
+                } elseif (preg_match('/^\$([a-zA-Z_]\w*)$/', $buffer, $matches)) {
+                    $return[$matches[1]] = null;
+                } else {
+                    return $this->_triggerMessage('Invalid syntax in assignment list', 2);
+                }
+                $buffer = '';
+            } elseif ($char == ' ' && $onTop) {
+                continue;
+            } else {
+                $buffer .= $char;
+            }
+        }
+        return $return;
     }
     
     private function _triggerMessage($message, $level = 1) {
@@ -1128,4 +1087,3 @@ class scriptparser_blockStack {
     }
     
 }
-?>
