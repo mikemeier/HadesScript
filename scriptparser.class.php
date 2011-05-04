@@ -128,17 +128,7 @@ class scriptparser {
                     case 'const':
                         if (!$block->get('active'))
                             continue;
-                        if (!preg_match('/^\$([a-zA-Z_]\w*)\s*=\s*(.+)$/', $parameters, $matches))
-                            return $this->_triggerMessage('Invalid syntax', 2);
-                        $varName = $matches[1]; $varValue = $matches[2];
-                        // make sure that it is not declared yet
-                        if (isSet($this->variables[$varName])) {
-                            $this->_triggerMessage("Cannot redeclare variable \${$varName}");
-                            continue;
-                        }
-                        // evaluate the value
-                        $varValueResult = $this->evaluateFormula($varValue);
-                        // stick it in the variable array
+                        // what type?
                         if ($command == 'var') {
                             $varType = 0;
                         } elseif ($command == 'global') {
@@ -146,7 +136,28 @@ class scriptparser {
                         } elseif ($command == 'const') {
                             $varType = 2;
                         }
-                        $this->declareVariable($varName, $varValueResult, $varType);
+                        // syntax okay?
+                        if ($parameters) {
+                            $vars = $this->_walkAssignList($parameters);
+                        } else {
+                            return _triggerMessage('Invalid syntax', 2);
+                        }
+                        // declare each variable
+                        foreach ($vars as $varName => $varValue) {
+                            // make sure that it is not declared yet
+                            if (isSet($this->variables[$varName])) {
+                                $this->_triggerMessage('Cannot redeclare variable $'.$varName);
+                                continue;
+                            }
+                            // evaluate the value
+                            if (!is_null($varValue)) {
+                                $varValueResult = $this->evaluateFormula($varValue);
+                            } else {
+                                $varValueResult = false;
+                            }
+                            // stick it in the variable array
+                            $this->declareVariable($varName, $varValueResult, $varType);
+                        }
                         break;
                     case 'set':
                         if (!$block->get('active'))
