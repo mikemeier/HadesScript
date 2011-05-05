@@ -1,7 +1,6 @@
 ; i'm a comment :)
 
-var $int = 16
-var $float = 32.8
+var $int = 16, $float = 32.8
 var $string = 'this is a string!'
 var $array = [8, 16.4, ['64', "this is also a string!"]]
 const $constant = 128

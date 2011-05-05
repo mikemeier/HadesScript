@@ -149,14 +149,8 @@ class scriptparser {
                                 $this->_triggerMessage('Cannot redeclare variable $'.$varName);
                                 continue;
                             }
-                            // evaluate the value
-                            if (!is_null($varValue)) {
-                                $varValueResult = $this->evaluateFormula($varValue);
-                            } else {
-                                $varValueResult = false;
-                            }
                             // stick it in the variable array
-                            $this->declareVariable($varName, $varValueResult, $varType);
+                            $this->declareVariable($varName, !is_null($varValue) ? $varValue : false, $varType);
                         }
                         break;
                     case 'set':
@@ -219,7 +213,7 @@ class scriptparser {
                         break;
                     case 'elseif':
                         $active = false;
-                        if ($block->get('active', 1) && !$block->get('active')) {
+                        if ($block->get('active', 1) && !$block->get('done')) {
                             if ((bool) $this->evaluateFormula($parameters)) {
                                 $active = true;
                             }
@@ -228,7 +222,7 @@ class scriptparser {
                         break;
                     case 'else':
                         $active = false;
-                        if ($block->get('active', 1) && !$block->get('active')) {
+                        if ($block->get('active', 1) && !$block->get('done')) {
                             $active = true;
                         }
                         $block->update('if', $active);
@@ -257,10 +251,10 @@ class scriptparser {
                             $varEnd = (int) $this->evaluateFormula($matches[3]);
                             $varStep = 1;
                         }
-                        if (!$block->isRegistered()) {
+                        if ($block->get('active', 1) && !$block->isRegistered()) {
                             $block->update('for', true, $lineNumber);
                             $this->declareVariable($varName, $varStart);
-                        } elseif ($this->variables[$varName]->value != $varEnd) {
+                        } elseif ($block->get('active', 1) && $this->variables[$varName]->value != $varEnd) {
                             if ($varEnd > $varStart) {
                                 $this->variables[$varName]->value += $varStep;
                             } elseif ($varEnd < $varStart) {
@@ -335,7 +329,7 @@ class scriptparser {
                             $this->_level--;
                         } elseif ($type == 'while' || $type == 'for' || $type == 'foreach') {
                             if ($block->get('active')) {
-                                $lineNumber = $block->get('loop')-1;
+                                $lineNumber = $block->get('loopBegin')-1;
                             } else {
                                 $block->remove();
                             }
@@ -927,13 +921,13 @@ class scriptparser {
             if ($char == "'" && $depth['arr'] == 0 && $depth['fnc'] == 0 && $depth['std'] == 0) {
                 if ($depth['sts'] == 0) {
                     $depth['sts']++;
-                } else {
+                } elseif (!$escape) {
                     $depth['sts']--;
                 }
             } elseif ($char == '"' && $depth['arr'] == 0 && $depth['fnc'] == 0 && $depth['sts'] == 0) {
                 if ($depth['std'] == 0) {
                     $depth['std']++;
-                } else {
+                } elseif (!$escape) {
                     $depth['std']--;
                 }
             } elseif ($char == '[' && $depth['fnc'] == 0 && $depth['sts'] == 0 && $depth['std'] == 0) {
@@ -944,6 +938,10 @@ class scriptparser {
                 $depth['fnc']++;
             } elseif ($char == '}' && $depth['arr'] == 0 && $depth['sts'] == 0 && $depth['std'] == 0) {
                 $depth['fnc']--;
+            } elseif (!$escape && $char == '\\' && ($depth['sts'] == 1 || $depth['std'] == 1)) {
+                $escape = true;
+            } else {
+                $escape = false;
             }
             $onTop = $depth['sts'] == 0 && $depth['std'] == 0 && $depth['arr'] == 0 && $depth['fnc'] == 0;
             if (($char == ',' && $onTop) || $pos == $end) {
@@ -1069,23 +1067,26 @@ class scriptparser_blockStack {
     
     public function get($property, $n = 0) {
         $level = $this->_currentLevel - $n;
-        if ($property == 'iteration') {
-            if ($this->_stack[$level]['loop'])
-                return $this->_stack[$level]['iteration'];
-            return false;
-        } else {
+        if (isSet($this->_stack[$level][$property])) {
             return $this->_stack[$level][$property];
+        } else {
+            return false;
         }
     }
     
     public function update($type, $active = true, $loop = false, $iterate = 1) {
         if ($this->_stackLevel < $this->_currentLevel)
             $this->_stackLevel++;
-        $this->_stack[$this->_stackLevel]['type'] = $type;
-        $this->_stack[$this->_stackLevel]['active'] = $active;
-        $this->_stack[$this->_stackLevel]['loop'] = $loop;
-        if ($loop) {
-            $this->_stack[$this->_stackLevel]['iteration'] += (int) $iterate;
+        $info =& $this->_stack[$this->_stackLevel];
+        $info['type'] = $type;
+        $info['active'] = $active;
+        if ($type == 'if' && $active) {
+            $info['done'] = true;
+        }
+        if ($loop > 0) {
+            $info['loop'] = true;
+            $info['loopBegin'] = $loop;
+            $info['iteration'] += (int) $iterate;
         }
     }
     
