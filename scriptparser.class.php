@@ -74,25 +74,24 @@ class scriptparser {
             $this->_zone = $zone;
             $line = trim($lines[$lineNumber-1]);
             if ($line != '' && substr($line, 0, 1) != ';') {
-                preg_match('/^([a-zA-Z_][\w:]*)(?:\s+(.+))*$/', $line, $matches);
+                if (!preg_match('/^([a-zA-Z_][\w:]*)(?:\s+(.+))*$/', $line, $matches))
+                    return $this->_triggerMessage('Invalid command', 2);
                 $command = $matches[1]; $parameters = (isSet($matches[2]) ? $matches[2] : false);
-                if ($func = $this->_capture) {
-                    if ($command == 'done') {
-                        $sequence = implode("\n", $this->_cache); $this->_cache = array();
-                        $this->createFunction($this->namespace, $func['name'], $sequence, $func['args'], $func['argDefaults']);
-                        $this->_capture = false;
-                    } else {
-                        $this->_cache[] = $line;
-                    }
-                    continue;
-                }
                 switch ($command) {
                     case 'return':
+                        if ($block->get('type') == 'macro') {
+                            $this->_cache[] = $line;
+                            continue;
+                        }
                         if (!$block->get('active'))
                             continue;
                         $return = $this->evaluateFormula($parameters);
                         break 2;
                     case 'echo':
+                        if ($block->get('type') == 'macro') {
+                            $this->_cache[] = $line;
+                            continue;
+                        }
                         if (!$block->get('active'))
                             continue;
                         $message = $this->evaluateFormula($parameters);
@@ -103,18 +102,30 @@ class scriptparser {
                         }
                         break;
                     case 'eval':
+                        if ($block->get('type') == 'macro') {
+                            $this->_cache[] = $line;
+                            continue;
+                        }
                         if (!$block->get('active'))
                             continue;
                         $code = (string) $this->evaluateFormula($parameters);
                         $this->execute($code);
                         break;
                     case 'import':
+                        if ($block->get('type') == 'macro') {
+                            $this->_cache[] = $line;
+                            continue;
+                        }
                         if (!$block->get('active'))
                             continue;
                         $file = (string) $this->evaluateFormula($parameters);
                         $this->executeFile($file);
                         break;
                     case 'namespace':
+                        if ($block->get('type') == 'macro') {
+                            $this->_cache[] = $line;
+                            continue;
+                        }
                         if (!$block->get('active'))
                             continue;
                         if ($parameters == 'global') {
@@ -126,6 +137,10 @@ class scriptparser {
                     case 'var':
                     case 'global':
                     case 'const':
+                        if ($block->get('type') == 'macro') {
+                            $this->_cache[] = $line;
+                            continue;
+                        }
                         if (!$block->get('active'))
                             continue;
                         // what type?
@@ -154,6 +169,10 @@ class scriptparser {
                         }
                         break;
                     case 'set':
+                        if ($block->get('type') == 'macro') {
+                            $this->_cache[] = $line;
+                            continue;
+                        }
                         if (!$block->get('active'))
                             continue;
                         if (!preg_match('/^\$([a-zA-Z_][\w\.]*)\s*(=|\+|-|\*|\/)\s*(.+)$/', $parameters, $matches))
@@ -196,23 +215,35 @@ class scriptparser {
                                 $varValueResult = $this->getVariable($varPath) / $varValue;
                                 break;
                             default:
-                                $this->_triggerMessage("Invalid assignment operator '{$varOperation}'");
+                                $this->_triggerMessage('Invalid assignment operator \''.$varOperation.'\'');
                                 break;
                         }
                         // stick it in the variable array
                         $this->setVariable($varPath, $varValueResult);
                         break;
                     case 'if':
-                        $this->_level++; $active = false;
+                        $this->_level++;
+                        if ($block->get('type') == 'macro') {
+                            $this->_cache[] = $line;
+                            continue;
+                        }
+                        $active = false;
                         if ($block->get('active', 1)) {
-                            if ((bool) $this->evaluateFormula($parameters)) {
+                            if ((bool) $this->evaluateFormula($parameters))
                                 $active = true;
-                            }
                         }
                         $block->update('if', $active);
                         break;
                     case 'elseif':
+                        if ($block->get('type') == 'macro') {
+                            $this->_cache[] = $line;
+                            continue;
+                        }
                         $active = false;
+                        if ($this->_capture) {
+                            $this->_cache[] = $line;
+                            continue;
+                        }
                         if ($block->get('active', 1) && !$block->get('done')) {
                             if ((bool) $this->evaluateFormula($parameters)) {
                                 $active = true;
@@ -221,6 +252,10 @@ class scriptparser {
                         $block->update('if', $active);
                         break;
                     case 'else':
+                        if ($block->get('type') == 'macro') {
+                            $this->_cache[] = $line;
+                            continue;
+                        }
                         $active = false;
                         if ($block->get('active', 1) && !$block->get('done')) {
                             $active = true;
@@ -229,17 +264,25 @@ class scriptparser {
                         break;
                     case 'while':
                         $this->_level++;
-                        $active = false; $loop = false;
+                        if ($block->get('type') == 'macro') {
+                            $this->_cache[] = $line;
+                            continue;
+                        }
+                        $active = false; $loopBegin = false;
                         if ($block->get('active', 1) && ($block->isRegistered() ? $block->get('active') : true)) {
                             if ((bool) $this->evaluateFormula($parameters)) {
                                 $active = true;
-	                            $loop = $lineNumber;
+	                            $loopBegin = $lineNumber;
                             }
                         }
-                        $block->update('while', $active, $loop);
+                        $block->update('while', $active, array('loopBegin' => $loopBegin));
                         break;
                     case 'for':
                         $this->_level++;
+                        if ($block->get('type') == 'macro') {
+                            $this->_cache[] = $line;
+                            continue;
+                        }
                         if (!preg_match('/^\$([a-zA-Z_]\w*)\s*=\s*(.+)\s+to\s+(.+)$/', $parameters, $matches))
                             return $this->_triggerMessage('Invalid syntax in for block', 2);
                         $varName = $matches[1];
@@ -252,7 +295,7 @@ class scriptparser {
                             $varStep = 1;
                         }
                         if ($block->get('active', 1) && !$block->isRegistered()) {
-                            $block->update('for', true, $lineNumber);
+                            $block->update('for', true, array('loopBegin' => $lineNumber));
                             $this->declareVariable($varName, $varStart);
                         } elseif ($block->get('active', 1) && $this->variables[$varName]->value != $varEnd) {
                             if ($varEnd > $varStart) {
@@ -266,13 +309,17 @@ class scriptparser {
                         break;
                     case 'foreach':
                         $this->_level++;
+                        if ($block->get('type') == 'macro') {
+                            $this->_cache[] = $line;
+                            continue;
+                        }
                         if (!preg_match('/^\$([a-zA-Z_]\w*)\s+in\s+(.+)$/', $parameters, $matches))
                             return $this->_triggerMessage('Invalid variable name for foreach block', 2);
                         $varName = $matches[1];
                         $inputArray = $this->evaluateFormula($matches[2]);
                         if (!is_array($inputArray))
                             return $this->_triggerMessage("Invalid argument supplied for foreach block", 2);
-                        $active = false; $loop = false; $activeNow = true; $iterationNow = 0;
+                        $active = false; $loopBegin = false; $activeNow = true; $iterationNow = 0;
                         if ($block->isRegistered()) {
                             $activeNow = $block->get('active');
                             $iterationNow = $block->get('iteration');
@@ -286,14 +333,20 @@ class scriptparser {
                             $offset = $iterationNow;
                             if ($offset <= $last) {
                                 $active = true;
-	                            $loop = $lineNumber;
+	                            $loopBegin = $lineNumber;
 	                            $this->variables[$varName]->value['key'] = $keys[$offset];
 	                            $this->variables[$varName]->value['value'] = $values[$offset];
                             }
                         }
-                        $block->update('foreach', $active, $loop);
+                        $block->update('foreach', $active, array('loopBegin' => $loopBegin));
                         break;
-                    case 'function':
+                    case 'macro':
+                        $this->_level++;
+                        if ($block->get('type') == 'macro') {
+                            $this->_cache[] = $line;
+                            continue;
+                        }
+                        // fetch name and raw arguments
                         if (preg_match('/^([a-zA-Z_]\w*)\s+(.+)$/', $parameters, $matches)) {
                             $funcName = $matches[1];
                             $funcArgsList = $matches[2];
@@ -316,25 +369,24 @@ class scriptparser {
                             }
                         }
                         // register block
-                        $this->_capture = array(
+                        $options = array(
                             'name' => $funcName,
                             'args' => $funcArgs,
                             'argDefaults' => $funcArgDefaults
                         );
+                        $block->update('macro', true, $options);
                         break;
                     case 'end':
-                        $type = $block->get('type');
-                        if ($type == 'if') {
-                            $block->remove();
-                            $this->_level--;
-                        } elseif ($type == 'while' || $type == 'for' || $type == 'foreach') {
-                            if ($block->get('active')) {
-                                $lineNumber = $block->get('loopBegin')-1;
-                            } else {
-                                $block->remove();
+                        if ($block->get('loop') && $block->get('active')) {
+                            $lineNumber = $block->get('loopBegin')-1;
+                        } else {
+                            if ($block->get('type') == 'macro') {
+                                $sequence = implode("\n", $this->_cache); $this->_cache = array();
+                                $this->createFunction($this->namespace, $block->get('name'), $sequence, $block->get('args'), $block->get('argDefaults'));
                             }
-                            $this->_level--;
+                            $block->remove();
                         }
+                        $this->_level--;
                         break;
                     default:
                         if (!$block->get('active'))
@@ -354,6 +406,9 @@ class scriptparser {
                 }
             }
         }
+        // is the level higher than 0? if yes, there is a missing block end
+        if ($this->_level > 0)
+            return $this->_triggerMessage('Missing block end', 2);
         // protected mode active?
         if ($protected) {
             // remove all temporarily added local variables
@@ -375,8 +430,9 @@ class scriptparser {
     }
     
     public function evaluateFormula($formula) {
-        if (($tokens = $this->_tokenizeFormula($formula)) === false)
-            return $this->_triggerMessage('Invalid formula');
+        $tokens = $this->_tokenizeFormula($formula);
+        if ($tokens === false)
+            return false;
         return $this->_computeFormula($tokens);
     }
     
@@ -455,7 +511,8 @@ class scriptparser {
             } elseif (isSet($func->argDefaults[$argName])) {
                 $predefinedVars[$argName] = $func->argDefaults[$argName];
             } else {
-                $predefinedVars[$argName] = $this->_triggerMessage('No default value for argument $'.$argName.' of {'.$name.'}', 2);
+                $this->_triggerMessage('No default value for argument $'.$argName.' of {'.$name.'}');
+                $predefinedVars[$argName] = false;
             }
         }
         // what type?
@@ -596,7 +653,7 @@ class scriptparser {
             } elseif ($char == '_') {
                 // we have to explicitly deny this, because it's legal on the stack and therefore not in the
                 // input expression
-                return $this->_triggerMessage('Illegal character \'_\'');
+                return $this->_triggerMessage('Unexpected character \'_\'', 2);
             } elseif ((in_array($char, $operators) || in_array($char, array('&', '|', '~', '=', '!', '<', '>')) || $atBeginning) && $expectingOperator) {
                 // are we putting an operator on the stack?
                 if ($atBeginning) {
@@ -624,7 +681,7 @@ class scriptparser {
                         $stack->push($char . '=');
                         $index += 2;
                     } else {
-                        return $this->_triggerMessage('Illegal character \''.$char.'\'', 2);
+                        return $this->_triggerMessage('Unexpected character \''.$char.'\'', 2);
                     }
                 } elseif ($char == '<' || $char == '>') {
                     if ($expression[$index + 1] == '=') {
@@ -670,11 +727,11 @@ class scriptparser {
                 return $this->_triggerMessage('Unexpected operator \''.$char.'\'', 2);
             } else {
                 // unknown character
-                return $this->_triggerMessage('Illegal character \''.$char.'\'', 2);
+                return $this->_triggerMessage('Unexpected character \''.$char.'\'', 2);
             }
             if ($index == strlen($expression)) {
                 if (in_array($char, $operators)) {
-                    return $this->_triggerMessage('Missing operand for operator \''.$char.'\'', 2);
+                    return $this->_triggerMessage('Invalid or missing operand', 2);
                 } else {
                     break;
                 }
@@ -714,9 +771,9 @@ class scriptparser {
                 // if the token is a binary operator, pop two values off the stack, do the operation, and push
                 // the result back on
                 if (is_null($operand2 = $stack->pop()))
-                    return $this->_triggerMessage('Invalid or missing second operand');
+                    return $this->_triggerMessage('Invalid second operand', 2);
                 if (is_null($operand1 = $stack->pop()))
-                    return $this->_triggerMessage('Invalid or missing first operand');
+                    return $this->_triggerMessage('Invalid first operand', 2);
                 switch ($token) {
                     case '+':
                         if (is_array($operand1) && is_array($operand2)) {
@@ -834,7 +891,7 @@ class scriptparser {
                 $stack->push($this->getVariable($matches[1]));
             } else {
                 // not a valid value
-                return $this->_triggerMessage("Invalid value '{$token}'");
+                return $this->_triggerMessage('Invalid value \''.$token.'\'');
             }
         }
         // when we're out of tokens, the stack should have a single element, the final result
@@ -1074,7 +1131,7 @@ class scriptparser_blockStack {
         }
     }
     
-    public function update($type, $active = true, $loop = false, $iterate = 1) {
+    public function update($type, $active = true, $options = array()) {
         if ($this->_stackLevel < $this->_currentLevel)
             $this->_stackLevel++;
         $info =& $this->_stack[$this->_stackLevel];
@@ -1082,11 +1139,15 @@ class scriptparser_blockStack {
         $info['active'] = $active;
         if ($type == 'if' && $active) {
             $info['done'] = true;
-        }
-        if ($loop > 0) {
+        } elseif ($type == 'while' || $type == 'for' || $type == 'foreach') {
             $info['loop'] = true;
-            $info['loopBegin'] = $loop;
-            $info['iteration'] += (int) $iterate;
+            $info['loopBegin'] = $options['loopBegin'];
+            $iterate = isSet($options['iterate']) ? (int) $options['iterate'] : 1;
+            $info['iteration'] += $iterate;
+        } elseif ($type == 'macro') {
+            $info['name'] = $options['name'];
+            $info['args'] = $options['args'];
+            $info['argDefaults'] = $options['argDefaults'];
         }
     }
     
